@@ -1,0 +1,19 @@
+# kind cluster for the local ETL platform.
+# Wires containerd to the local registry (registry:3 recipe): localhost:5001 image refs
+# resolve to the kind-registry container on the kind docker network.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: etl
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # convenience host access (also usable via `kubectl port-forward`)
+      - containerPort: 30080   # Airflow api-server NodePort (optional)
+        hostPort: 30080
+        protocol: TCP
+  - role: worker
+  - role: worker
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"

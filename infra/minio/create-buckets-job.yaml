@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-buckets
+  namespace: minio
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mc
+          image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+          envFrom:
+            - secretRef:
+                name: minio-root
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              mc alias set local http://minio.minio.svc.cluster.local:9000 \
+                "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+              mc ready local
+              # bronze/silver/gold are key prefixes delta-rs creates on write; only `lake` is needed.
+              mc mb --ignore-existing local/lake
+              mc ls local
+              echo "bucket 'lake' ready"

@@ -1,0 +1,23 @@
+pipelines:
+- id: costs
+  schedule: '@daily'
+  image: localhost:5001/etl:dev
+  tags:
+  - etl
+  - costs
+  steps:
+  - id: extract
+    upstream: []
+  - id: clean
+    upstream:
+    - extract
+  - id: aggregate
+    upstream:
+    - clean
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: '1'
+        memory: 1Gi

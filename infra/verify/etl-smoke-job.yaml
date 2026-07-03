@@ -1,0 +1,47 @@
+# In-cluster smoke test: runs the real `costs` pipeline against MinIO twice (initial load +
+# a late-arriving update) and prints the gold table, proving the delta-rs conditional-put
+# path on MinIO and the affected-partition recompute end to end.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: etl-smoke
+  namespace: airflow
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: etl
+          image: localhost:5001/etl:dev
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: minio-credentials
+          env:
+            - name: MINIO_ENDPOINT
+              value: http://minio.minio.svc.cluster.local:9000
+            - name: LAKE_URI
+              value: s3://lake
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              RUN1='[{"cost_id":"A","cost_period":"2026-05","cost_center":"X","amount":100},
+                     {"cost_id":"B","cost_period":"2026-05","cost_center":"X","amount":50},
+                     {"cost_id":"C","cost_period":"2026-06","cost_center":"X","amount":200}]'
+              RUN2='[{"cost_id":"A","cost_period":"2026-05","cost_center":"X","amount":130},
+                     {"cost_id":"B","cost_period":"2026-05","cost_center":"X","amount":50},
+                     {"cost_id":"C","cost_period":"2026-06","cost_center":"X","amount":200},
+                     {"cost_id":"D","cost_period":"2026-05","cost_center":"X","amount":20}]'
+              echo "===== RUN 1 (initial load) ====="
+              for s in extract clean aggregate; do
+                COSTS_SEED_JSON="$RUN1" python -m etl run costs $s --run-ts run1 --logical-date 2026-01-01
+              done
+              echo "===== RUN 2 (A updated 100->130, late D=20 for 2026-05) ====="
+              for s in extract clean aggregate; do
+                COSTS_SEED_JSON="$RUN2" python -m etl run costs $s --run-ts run2 --logical-date 2026-01-02
+              done
+              echo "===== GOLD (expect 2026-05/X=200, 2026-06/X=200) ====="
+              python -c "import polars as pl; from etl.framework.storage import minio_storage_options as so; \
+                print(pl.read_delta('s3://lake/gold/costs/cost_by_period', storage_options=so()).sort('cost_period','cost_center'))"

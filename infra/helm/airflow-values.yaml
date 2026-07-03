@@ -1,0 +1,62 @@
+# Official apache-airflow Helm chart values (chart 1.22.x / Airflow 3.2.x).
+# Verified against the review: no `extraPipPackages` (not a real chart key; PyYAML +
+# cncf.kubernetes already ship in the stock non-slim image).
+
+executor: KubernetesExecutor
+
+# Stock non-slim image (KubernetesPodOperator provider is bundled here, not in slim).
+# defaultAirflowTag/appVersion come from the pinned chart version.
+
+# Chart-managed metadata DB — fine for local testing (not prod HA).
+postgresql:
+  enabled: true
+
+# Run the DB-migration and create-user jobs as NORMAL resources (not Helm hooks). With
+# `helm --wait`, hook-based jobs deadlock: --wait blocks on the deployments, which block on
+# migrations, which (as post-install hooks) only run after the deployments are ready.
+migrateDatabaseJob:
+  useHelmHooks: false
+  applyCustomEnv: false
+createUserJob:
+  useHelmHooks: false
+  applyCustomEnv: false
+
+# RBAC: chart defaults already grant workers create/delete on pods in this namespace,
+# which is exactly what KubernetesPodOperator needs (KPO targets namespace=airflow).
+rbac:
+  create: true
+allowPodLaunching: true
+multiNamespaceMode: false
+
+# DAG delivery via git-sync (Airflow 3 uses apiServer + dagProcessor components).
+dags:
+  persistence:
+    enabled: false
+  gitSync:
+    enabled: true
+    # >>> SET THIS to your repo (the dags/ folder is synced from subPath). <<<
+    # Public HTTPS repo needs no credentials. Private:
+    #   - HTTPS: set `credentialsSecret` (Secret keys GIT_SYNC_USERNAME / GIT_SYNC_PASSWORD)
+    #   - SSH  : set `sshKeySecret` (Secret key gitSshKey) AND `sshKnownHosts`
+    repo: https://github.com/UsmanZahid/airflow_k8.git
+    branch: main
+    rev: HEAD
+    subPath: dags
+    period: 30s
+    wait: 30
+
+# Give the components enough headroom for local kind.
+scheduler:
+  replicas: 1
+dagProcessor:
+  enabled: true
+triggerer:
+  replicas: 1
+apiServer:
+  replicas: 1
+
+# Airflow's own S3 connection to MinIO (safe concurrent writes via conditional-put).
+extraEnv: |
+  - name: AIRFLOW_CONN_MINIO_S3
+    value: >-
+      aws://minioadmin:minioadmin123@?endpoint_url=http%3A%2F%2Fminio.minio.svc.cluster.local%3A9000&region_name=us-east-1

@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+etl/.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local data / delta lake scratch
+_locallake/
+*.tmp
+
+# Secrets (real ones — the checked-in *.yaml are test-only placeholders)
+*.secret.yaml
+kubeconfig
