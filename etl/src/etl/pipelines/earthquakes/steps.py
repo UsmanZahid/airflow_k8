@@ -22,26 +22,25 @@ from etl.framework import Dataset, MapStep, Step
 
 API_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 
-# Loosely-typed raw landing (normalization/typing happens in silver).
-_BRONZE_SCHEMA = {
+# Bronze is the raw feature JSON, untouched (`id` kept as the natural key for readability).
+# All flattening/typing happens in normalize (phase 2).
+_BRONZE_SCHEMA = {"id": pl.Utf8, "raw": pl.Utf8}
+
+# Schema used to decode the raw feature JSON in normalize (only the fields we need; extra
+# USGS fields are ignored). Mirrors the geojson shape: {id, properties{...}, geometry{...}}.
+_FEATURE_DTYPE = pl.Struct({
     "id": pl.Utf8,
-    "mag": pl.Float64,
-    "place": pl.Utf8,
-    "time": pl.Int64,        # epoch milliseconds
-    "updated": pl.Int64,     # epoch milliseconds
-    "status": pl.Utf8,
-    "tsunami": pl.Int64,
-    "sig": pl.Int64,
-    "net": pl.Utf8,
-    "code": pl.Utf8,
-    "magtype": pl.Utf8,
-    "event_type": pl.Utf8,
-    "title": pl.Utf8,
-    "longitude": pl.Float64,
-    "latitude": pl.Float64,
-    "depth": pl.Float64,
-    "raw": pl.Utf8,          # full feature JSON for fidelity/audit
-}
+    "properties": pl.Struct({
+        "mag": pl.Float64,
+        "place": pl.Utf8,
+        "time": pl.Int64,       # epoch milliseconds
+        "updated": pl.Int64,    # epoch milliseconds
+        "sig": pl.Int64,
+        "magType": pl.Utf8,
+        "title": pl.Utf8,
+    }),
+    "geometry": pl.Struct({"coordinates": pl.List(pl.Float64)}),  # [lon, lat, depth]
+})
 
 
 class ExtractEarthquakes(Step):
@@ -101,56 +100,44 @@ def fetch_geojson(start: str, end: str) -> dict:
 
 
 def features_to_frame(geojson: dict) -> pl.DataFrame:
-    rows = []
-    for f in geojson.get("features", []) or []:
-        p = f.get("properties") or {}
-        coords = (f.get("geometry") or {}).get("coordinates") or []
-        rows.append({
-            "id": f.get("id"),
-            "mag": p.get("mag"),
-            "place": p.get("place"),
-            "time": p.get("time"),
-            "updated": p.get("updated"),
-            "status": p.get("status"),
-            "tsunami": p.get("tsunami"),
-            "sig": p.get("sig"),
-            "net": p.get("net"),
-            "code": p.get("code"),
-            "magtype": p.get("magType"),
-            "event_type": p.get("type"),
-            "title": p.get("title"),
-            "longitude": coords[0] if len(coords) > 0 else None,
-            "latitude": coords[1] if len(coords) > 1 else None,
-            "depth": coords[2] if len(coords) > 2 else None,
-            "raw": json.dumps(f, separators=(",", ":")),
-        })
-    return pl.DataFrame(rows, schema=_BRONZE_SCHEMA)
+    """Bronze landing: one row per feature holding the raw JSON, untouched."""
+    feats = geojson.get("features", []) or []
+    return pl.DataFrame(
+        {
+            "id": [f.get("id") for f in feats],
+            "raw": [json.dumps(f, separators=(",", ":")) for f in feats],
+        },
+        schema=_BRONZE_SCHEMA,
+    )
 
 
 def normalize(raw: pl.DataFrame) -> pl.DataFrame:
-    """Reshape/rename to the analysis schema; epoch-ms -> timestamps; derive event_date.
+    """Parse the raw feature JSON and reshape to the analysis schema via Polars struct access
+    (mirrors Spark's col('properties.mag') / col('geometry.coordinates').getItem(i)).
     Columns: id, longitude, latitude, elevation, title, place_description, sig, mag,
-    magType, time, updated (+ event_date as the partition key)."""
+    magType, time, updated (+ event_date partition key). epoch-ms -> timestamps."""
+    decoded = raw.with_columns(pl.col("raw").str.json_decode(_FEATURE_DTYPE).alias("f"))
+    props = pl.col("f").struct.field("properties")
+    coords = pl.col("f").struct.field("geometry").struct.field("coordinates")
     return (
-        raw.with_columns(
+        decoded.select(
+            pl.col("f").struct.field("id").alias("id"),
+            coords.list.get(0, null_on_oob=True).alias("longitude"),
+            coords.list.get(1, null_on_oob=True).alias("latitude"),
+            coords.list.get(2, null_on_oob=True).alias("elevation"),
+            props.struct.field("title").alias("title"),
+            props.struct.field("place").alias("place_description"),
+            props.struct.field("sig").alias("sig"),
+            props.struct.field("mag").alias("mag"),
+            props.struct.field("magType").alias("magType"),
+            props.struct.field("time").alias("time"),
+            props.struct.field("updated").alias("updated"),
+        )
+        .with_columns(
             pl.from_epoch(pl.col("time"), time_unit="ms").alias("time"),
             pl.from_epoch(pl.col("updated"), time_unit="ms").alias("updated"),
         )
         .with_columns(pl.col("time").dt.strftime("%Y-%m-%d").alias("event_date"))
-        .select(
-            "id",
-            "longitude",
-            "latitude",
-            pl.col("depth").alias("elevation"),
-            "title",
-            pl.col("place").alias("place_description"),
-            "sig",
-            "mag",
-            pl.col("magtype").alias("magType"),
-            "time",
-            "updated",
-            "event_date",  # partition key (additive; not in the base select list)
-        )
     )
 
 
