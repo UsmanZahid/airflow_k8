@@ -133,9 +133,11 @@ def normalize(raw: pl.DataFrame) -> pl.DataFrame:
             props.struct.field("time").alias("time"),
             props.struct.field("updated").alias("updated"),
         )
+        # UTC-aware (not naive): delta-rs then writes a standard `timestamp` (reader v2)
+        # instead of `timestampNtz` (reader v3), which engines like Dremio can't read.
         .with_columns(
-            pl.from_epoch(pl.col("time"), time_unit="ms").alias("time"),
-            pl.from_epoch(pl.col("updated"), time_unit="ms").alias("updated"),
+            pl.from_epoch(pl.col("time"), time_unit="ms").dt.replace_time_zone("UTC").alias("time"),
+            pl.from_epoch(pl.col("updated"), time_unit="ms").dt.replace_time_zone("UTC").alias("updated"),
         )
         .with_columns(pl.col("time").dt.strftime("%Y-%m-%d").alias("event_date"))
     )

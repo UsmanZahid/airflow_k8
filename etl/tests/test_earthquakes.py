@@ -70,7 +70,7 @@ def test_normalize_shapes_and_event_date(tmp_path, monkeypatch):
     row = s.filter(s["id"] == "ci1").to_dicts()[0]
     assert row["mag"] == 1.5 and row["longitude"] == -116.7 and row["elevation"] == 11.0
     assert row["place_description"] == "CA" and row["magType"] == "ml"
-    assert row["time"] == dt.datetime(2014, 1, 1, 12)
+    assert row["time"] == dt.datetime(2014, 1, 1, 12, tzinfo=dt.timezone.utc)  # UTC-aware
 
 
 def test_upsert_revision_updates_in_place(tmp_path, monkeypatch):

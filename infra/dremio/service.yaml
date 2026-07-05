@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dremio
+  namespace: dremio
+  labels:
+    app: dremio
+spec:
+  selector:
+    app: dremio
+  ports:
+    - name: web        # UI (port-forward this)
+      port: 9047
+      targetPort: web
+    - name: client     # Arrow Flight / JDBC / ODBC
+      port: 31010
+      targetPort: client

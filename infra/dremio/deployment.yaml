@@ -1,0 +1,70 @@
+# Dremio Community (OSS) — single-node, for querying the Delta Lake tables on MinIO.
+# Test-only: single replica, embedded coordinator+executor. Not a production HA deploy.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dremio-data
+  namespace: dremio
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dremio
+  namespace: dremio
+  labels:
+    app: dremio
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: dremio
+  template:
+    metadata:
+      labels:
+        app: dremio
+    spec:
+      securityContext:
+        fsGroup: 999          # dremio uid/gid -> PVC writable
+      containers:
+        - name: dremio
+          image: dremio/dremio-oss:26.0.5
+          env:
+            - name: DREMIO_MAX_HEAP_MEMORY_SIZE_MB
+              value: "3072"
+            - name: DREMIO_MAX_DIRECT_MEMORY_SIZE_MB
+              value: "3072"
+          ports:
+            - name: web
+              containerPort: 9047
+            - name: client        # Arrow Flight / JDBC / ODBC
+              containerPort: 31010
+            - name: server-fabric
+              containerPort: 45678
+          volumeMounts:
+            - name: data
+              mountPath: /opt/dremio/data
+          readinessProbe:
+            httpGet:
+              path: /
+              port: web
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 20
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "3Gi"
+            limits:
+              cpu: "4"
+              memory: "7Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dremio-data
