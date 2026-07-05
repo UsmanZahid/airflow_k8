@@ -21,3 +21,16 @@ pipelines:
       limits:
         cpu: '1'
         memory: 1Gi
+- id: earthquakes
+  schedule: '@daily'
+  image: localhost:5001/etl:dev
+  tags:
+  - etl
+  - earthquakes
+  - usgs
+  steps:
+  - id: extract
+    upstream: []
+  - id: normalize
+    upstream:
+    - extract
