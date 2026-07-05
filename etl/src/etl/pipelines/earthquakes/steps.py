@@ -18,7 +18,7 @@ import json
 import httpx
 import polars as pl
 
-from etl.framework import Dataset, Step
+from etl.framework import Dataset, MapStep, Step
 
 API_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 
@@ -64,6 +64,20 @@ class NormalizeEarthquakes(Step):
     def run(self, ctx) -> None:
         raw = ExtractEarthquakes.read_new(ctx)  # only this run's fetched features
         self.upsert(ctx, normalize(raw), source=self.source)
+
+
+class EnrichEarthquakes(MapStep):
+    """Phase 3: enrich the events changed this run with country_code/city (offline reverse
+    geocoding from lat/lon) and a significance class. Row-level (MapStep) -> processes only
+    the events ingested/revised this run, upserts to gold by id."""
+
+    id = "enrich"
+    output = Dataset("gold", "earthquakes", "events_enriched", key=("id",), partition_by=("event_date",))
+    upstream = (NormalizeEarthquakes,)
+    source_step = NormalizeEarthquakes
+
+    def transform(self, rows: pl.DataFrame) -> pl.DataFrame:
+        return enrich(rows)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -114,15 +128,63 @@ def features_to_frame(geojson: dict) -> pl.DataFrame:
 
 
 def normalize(raw: pl.DataFrame) -> pl.DataFrame:
+    """Reshape/rename to the analysis schema; epoch-ms -> timestamps; derive event_date.
+    Columns: id, longitude, latitude, elevation, title, place_description, sig, mag,
+    magType, time, updated (+ event_date as the partition key)."""
     return (
         raw.with_columns(
-            pl.from_epoch(pl.col("time"), time_unit="ms").alias("event_time"),
-            pl.from_epoch(pl.col("updated"), time_unit="ms").alias("updated_time"),
+            pl.from_epoch(pl.col("time"), time_unit="ms").alias("time"),
+            pl.from_epoch(pl.col("updated"), time_unit="ms").alias("updated"),
         )
-        .with_columns(pl.col("event_time").dt.strftime("%Y-%m-%d").alias("event_date"))
+        .with_columns(pl.col("time").dt.strftime("%Y-%m-%d").alias("event_date"))
         .select(
-            "id", "event_time", "updated_time", "event_date",
-            "mag", "magtype", "place", "longitude", "latitude", "depth",
-            "status", "tsunami", "sig", "net", "event_type", "title",
+            "id",
+            "longitude",
+            "latitude",
+            pl.col("depth").alias("elevation"),
+            "title",
+            pl.col("place").alias("place_description"),
+            "sig",
+            "mag",
+            pl.col("magtype").alias("magType"),
+            "time",
+            "updated",
+            "event_date",  # partition key (additive; not in the base select list)
         )
     )
+
+
+_GEO = None
+
+
+def _geocoder():
+    """Lazy singleton offline reverse geocoder. mode=1 = single-process (no multiprocessing),
+    which is robust under pytest/uv on Windows and fork on Linux alike."""
+    global _GEO
+    if _GEO is None:
+        import reverse_geocoder as rg
+
+        _GEO = rg.RGeocoder(mode=1, verbose=False)
+    return _GEO
+
+
+def enrich(rows: pl.DataFrame) -> pl.DataFrame:
+    """Add country_code + city (reverse-geocoded from lat/lon) and sig_class."""
+    sig_class = (
+        pl.when(pl.col("sig") < 100).then(pl.lit("Low"))
+        .when(pl.col("sig") < 500).then(pl.lit("Moderate"))
+        .otherwise(pl.lit("High"))
+        .alias("sig_class")
+    )
+    if rows.is_empty():
+        return rows.with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias("country_code"),
+            pl.lit(None, dtype=pl.Utf8).alias("city"),
+            pl.lit(None, dtype=pl.Utf8).alias("sig_class"),
+        )
+    coords = [(float(la), float(lo)) for la, lo in zip(rows["latitude"], rows["longitude"])]
+    results = _geocoder().query(coords)
+    return rows.with_columns(
+        pl.Series("country_code", [r.get("cc") for r in results], dtype=pl.Utf8),
+        pl.Series("city", [r.get("name") for r in results], dtype=pl.Utf8),
+    ).with_columns(sig_class)

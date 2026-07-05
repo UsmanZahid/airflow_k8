@@ -62,9 +62,15 @@ def test_normalize_shapes_and_event_date(tmp_path, monkeypatch):
     assert s.height == 2
     assert s["id"].to_list() == ["ci1", "ci2"]
     assert set(s["event_date"].to_list()) == {"2014-01-01"}
+    # analysis schema (their phase-2 spec) + event_date partition
+    assert set(s.columns) == {
+        "id", "longitude", "latitude", "elevation", "title", "place_description",
+        "sig", "mag", "magType", "time", "updated", "event_date",
+    }
     row = s.filter(s["id"] == "ci1").to_dicts()[0]
-    assert row["mag"] == 1.5 and row["longitude"] == -116.7 and row["depth"] == 11.0
-    assert row["event_time"] == dt.datetime(2014, 1, 1, 12)
+    assert row["mag"] == 1.5 and row["longitude"] == -116.7 and row["elevation"] == 11.0
+    assert row["place_description"] == "CA" and row["magType"] == "ml"
+    assert row["time"] == dt.datetime(2014, 1, 1, 12)
 
 
 def test_upsert_revision_updates_in_place(tmp_path, monkeypatch):
@@ -88,3 +94,26 @@ def test_incremental_does_not_delete_prior_days(tmp_path, monkeypatch):
     s = _silver(_rc(lake, 2)).sort("id")
     assert s["id"].to_list() == ["ci1", "ci2"]
     assert set(s["event_date"].to_list()) == {"2014-01-01", "2014-01-02"}
+
+
+def _with_sig(feat, sig):
+    feat["properties"]["sig"] = sig
+    return feat
+
+
+def test_enrich_adds_country_code_and_sig_class(tmp_path, monkeypatch):
+    lake = tmp_path / "lake"
+    gj = _geojson(
+        _with_sig(_feature("us1", 3.0, _ms(2014, 1, 1), _ms(2014, 1, 1), lon=-118.25, lat=34.05, place="LA"), 50),
+        _with_sig(_feature("jp1", 4.0, _ms(2014, 1, 1, 2), _ms(2014, 1, 1, 2), lon=139.69, lat=35.68, place="Tokyo"), 200),
+        _with_sig(_feature("vu1", 6.5, _ms(2014, 1, 1, 4), _ms(2014, 1, 1, 4), lon=167.29, lat=-13.09, place="Vanuatu"), 600),
+    )
+    ctx = _rc(lake, 1)
+    monkeypatch.setattr(eq, "fetch_geojson", lambda s, e: gj)
+    for step in ("extract", "normalize", "enrich"):
+        run_step("earthquakes", step, ctx)
+
+    g = {r["id"]: r for r in ctx.read(eq.EnrichEarthquakes.output).to_dicts()}
+    assert g["us1"]["country_code"] == "US" and g["us1"]["sig_class"] == "Low"
+    assert g["jp1"]["country_code"] == "JP" and g["jp1"]["sig_class"] == "Moderate"
+    assert g["vu1"]["country_code"] == "VU" and g["vu1"]["sig_class"] == "High"

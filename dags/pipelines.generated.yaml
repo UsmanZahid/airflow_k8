@@ -34,3 +34,6 @@ pipelines:
   - id: normalize
     upstream:
     - extract
+  - id: enrich
+    upstream:
+    - normalize

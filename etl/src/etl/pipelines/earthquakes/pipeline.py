@@ -1,11 +1,11 @@
 from etl.framework import Pipeline, register
 
-from .steps import ExtractEarthquakes, NormalizeEarthquakes
+from .steps import EnrichEarthquakes, ExtractEarthquakes, NormalizeEarthquakes
 
 
 @register
 class Earthquakes(Pipeline):
     id = "earthquakes"
     schedule = "@daily"
-    steps = (ExtractEarthquakes, NormalizeEarthquakes)
+    steps = (ExtractEarthquakes, NormalizeEarthquakes, EnrichEarthquakes)
     tags = ("etl", "earthquakes", "usgs")
