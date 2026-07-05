@@ -1,0 +1,88 @@
+# Small Postgres "serving layer" for BI — curated/gold data is loaded here for Superset to
+# query. Test-only (single node, ephemeral-ish). The lakehouse (Delta on MinIO) stays the
+# analytical store; this is just the fast, BI-friendly serving copy.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: serving-postgres
+  namespace: superset
+type: Opaque
+stringData:
+  POSTGRES_USER: bi
+  POSTGRES_PASSWORD: bi_password
+  POSTGRES_DB: analytics
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: serving-postgres-data
+  namespace: superset
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: serving-postgres
+  namespace: superset
+  labels:
+    app: serving-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: serving-postgres
+  template:
+    metadata:
+      labels:
+        app: serving-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          envFrom:
+            - secretRef:
+                name: serving-postgres
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "bi", "-d", "analytics"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: serving-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: serving-postgres
+  namespace: superset
+  labels:
+    app: serving-postgres
+spec:
+  selector:
+    app: serving-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

@@ -12,6 +12,9 @@ spec:
     - name: web        # UI (port-forward this)
       port: 9047
       targetPort: web
-    - name: client     # Arrow Flight / JDBC / ODBC
+    - name: client     # JDBC / ODBC
       port: 31010
       targetPort: client
+    - name: flight     # Arrow Flight SQL (Superset/BI tools connect here)
+      port: 32010
+      targetPort: 32010

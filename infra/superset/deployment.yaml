@@ -1,0 +1,83 @@
+# Apache Superset — single-node, SQLite metadata on a PVC. Test-only (not prod HA;
+# prod uses Postgres + Redis + Celery workers).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: superset-home
+  namespace: superset
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+  namespace: superset
+  labels:
+    app: superset
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: superset
+  template:
+    metadata:
+      labels:
+        app: superset
+    spec:
+      securityContext:
+        fsGroup: 1000          # superset uid/gid -> PVC writable
+      containers:
+        - name: superset
+          image: localhost:5001/superset:dev   # stock Superset + psycopg2-binary (Postgres driver)
+          imagePullPolicy: Always
+          env:
+            - name: SUPERSET_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: superset-secret
+                  key: SUPERSET_SECRET_KEY
+            - name: FLASK_APP
+              value: "superset"
+            - name: SUPERSET_LOAD_EXAMPLES
+              value: "no"
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              superset db upgrade
+              superset fab create-admin --username admin --firstname Admin \
+                --lastname User --email admin@superset.local --password admin || true
+              superset init
+              exec gunicorn --bind 0.0.0.0:8088 --workers 3 --timeout 120 \
+                --limit-request-line 0 --limit-request-field_size 0 \
+                "superset.app:create_app()"
+          ports:
+            - name: http
+              containerPort: 8088
+          volumeMounts:
+            - name: home
+              mountPath: /app/superset_home
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "3Gi"
+      volumes:
+        - name: home
+          persistentVolumeClaim:
+            claimName: superset-home

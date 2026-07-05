@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: superset
+  labels:
+    app.kubernetes.io/part-of: etl-platform
+---
+# TEST-ONLY secret key.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-secret
+  namespace: superset
+type: Opaque
+stringData:
+  SUPERSET_SECRET_KEY: "airflow_k8_superset_test_secret_key_0123456789_change_me"
