@@ -19,7 +19,7 @@ from .context import RunContext
 
 class Step(ABC):
     id: ClassVar[str]
-    output: ClassVar[Dataset]
+    output: ClassVar[Dataset | None] = None  # None for sink/publish steps (no Delta output)
     upstream: ClassVar[tuple[type["Step"], ...]] = ()
     resources: ClassVar[dict | None] = None  # optional pod resources -> flows into the manifest
 
@@ -49,6 +49,10 @@ class Step(ABC):
 
     def upsert(self, ctx: RunContext, df: pl.DataFrame, source: str = "incremental") -> None:
         ctx.upsert(self.output, df, source)
+
+    def publish_postgres(self, ctx: RunContext, df: pl.DataFrame, table: str, mode: str = "replace") -> None:
+        """Sink to the serving Postgres (for BI). Requires SERVING_DB_URI in the pod env."""
+        ctx.write_postgres(df, table, mode)
 
     @abstractmethod
     def run(self, ctx: RunContext) -> None:

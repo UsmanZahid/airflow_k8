@@ -190,6 +190,14 @@ class RunContext:
             if not p.is_empty():
                 p.write_delta(self._marker_uri(ds, "partitions"), mode="overwrite", storage_options=self._so)
 
+    # ------------------------------------------------------------------ serving sink (BI)
+    def write_postgres(self, df: pl.DataFrame, table: str, mode: str = "replace") -> None:
+        """Write a (small, curated) frame to the serving Postgres via ADBC. Used to keep the
+        BI layer (Superset) in sync with gold. Connection from SERVING_DB_URI env."""
+        import os
+        uri = os.environ["SERVING_DB_URI"]
+        df.write_database(table, uri, if_table_exists=mode, engine="adbc")
+
     def affected(self, ds: Dataset, level: str) -> pl.DataFrame:
         """level in {'keys','partitions'}. Typed-empty frame if no marker was written."""
         uri = self._marker_uri(ds, level)

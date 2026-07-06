@@ -79,6 +79,18 @@ class EnrichEarthquakes(MapStep):
         return enrich(rows)
 
 
+class PublishEarthquakes(Step):
+    """Phase 4: mirror gold into the serving Postgres so the BI layer (Superset) auto-updates
+    each run. No Delta output (sink step)."""
+
+    id = "publish"
+    upstream = (EnrichEarthquakes,)
+
+    def run(self, ctx) -> None:
+        gold = EnrichEarthquakes.read(ctx)  # full enriched gold
+        self.publish_postgres(ctx, gold, "earthquake_events", mode="replace")
+
+
 # --------------------------------------------------------------------------- helpers
 
 def day_window(logical_date: str) -> tuple[str, str]:

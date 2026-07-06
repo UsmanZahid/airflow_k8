@@ -39,7 +39,15 @@ def etl_step_task(pipeline: str, step: str, image: str, resources: dict | None =
             "--logical-date", "{{ ds }}",
         ],
         env_vars={"MINIO_ENDPOINT": MINIO_ENDPOINT},
-        env_from=[k8s.V1EnvFromSource(secret_ref=k8s.V1SecretEnvSource(name="minio-credentials"))],
+        env_from=[
+            k8s.V1EnvFromSource(secret_ref=k8s.V1SecretEnvSource(name="minio-credentials")),
+            # SERVING_DB_URI for the publish/sink step (Postgres serving layer for BI)
+            k8s.V1EnvFromSource(secret_ref=k8s.V1SecretEnvSource(name="serving-db", optional=True)),
+        ],
+        # 1-slot pool per pipeline -> serializes ALL runs (scheduled + backfill + manual) so
+        # two pods never write the same Delta tables at once (backfill ignores max_active_runs,
+        # which previously caused silent concurrent-writer data loss).
+        pool=f"etl_{pipeline}",
         container_resources=_resources(resources),
         security_context=k8s.V1SecurityContext(
             run_as_non_root=True,

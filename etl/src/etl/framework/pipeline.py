@@ -32,8 +32,9 @@ def _validate(p: type[Pipeline]) -> None:
     assert len(ids) == len(set(ids)), f"{p.id}: duplicate step ids {ids}"
     stepset = set(p.steps)
     for s in p.steps:
-        assert s.output.pipeline == p.id, (
-            f"{p.id}.{s.id}: output.pipeline '{s.output.pipeline}' != pipeline id '{p.id}'"
-        )
+        if s.output is not None:  # sink/publish steps have no Delta output
+            assert s.output.pipeline == p.id, (
+                f"{p.id}.{s.id}: output.pipeline '{s.output.pipeline}' != pipeline id '{p.id}'"
+            )
         for up in s.upstream:
             assert up in stepset, f"{p.id}.{s.id}: upstream {up.__name__} not listed in steps"

@@ -37,3 +37,6 @@ pipelines:
   - id: enrich
     upstream:
     - normalize
+  - id: publish
+    upstream:
+    - enrich
