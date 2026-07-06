@@ -9,7 +9,7 @@ NS_AIRFLOW    ?= airflow
 NS_MINIO      ?= minio
 CHART_VERSION ?= 1.22.0
 
-.PHONY: help cluster-up registry minio etl-image manifest airflow up down ui logs test new-pipeline
+.PHONY: help cluster-up registry minio etl-image manifest airflow pools up down ui logs test new-pipeline
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -46,7 +46,14 @@ airflow: ## helm install Airflow (KubernetesExecutor + git-sync)
 		--namespace $(NS_AIRFLOW) --version $(CHART_VERSION) \
 		-f infra/helm/airflow-values.yaml --timeout 10m
 
-up: cluster-up minio etl-image manifest airflow ## Everything, in order
+pools: ## Create the 1-slot serialization pool for each pipeline (serializes writers)
+	@for p in $$(grep -E '^- id:' dags/pipelines.generated.yaml | awk '{print $$3}'); do \
+	  echo "pool etl_$$p"; \
+	  kubectl -n $(NS_AIRFLOW) exec deploy/airflow-scheduler -c scheduler -- \
+	    airflow pools set etl_$$p 1 "serialize $$p writers"; \
+	done
+
+up: cluster-up minio etl-image manifest airflow pools ## Everything, in order
 
 down: ## Delete the kind cluster
 	kind delete cluster --name $(CLUSTER)

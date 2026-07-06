@@ -1,0 +1,20 @@
+slice_name: Earthquake events by country
+description: null
+certified_by: null
+certification_details: null
+viz_type: world_map
+params:
+  viz_type: world_map
+  datasource: 1__table
+  entity: country_code
+  country_fieldtype: cca2
+  metric: count
+  adhoc_filters: []
+  row_limit: 1000
+  max_bubble_size: '25'
+  show_bubbles: true
+query_context: '{"datasource":{"id":1,"type":"table"},"force":false,"queries":[{"filters":[],"extras":{"having":"","where":""},"applied_time_extras":{},"columns":[],"metrics":["count"],"annotation_layers":[],"row_limit":1000,"series_limit":0,"order_desc":true,"url_params":{},"custom_params":{},"custom_form_data":{}}],"form_data":{"adhoc_filters":[],"country_fieldtype":"cca2","datasource":"1__table","entity":"country_code","max_bubble_size":"25","metric":"count","row_limit":1000,"show_bubbles":true,"slice_id":1,"viz_type":"world_map","force":false,"result_format":"json","result_type":"full"},"result_format":"json","result_type":"full"}'
+cache_timeout: null
+uuid: 00e37966-a836-491f-9453-dcdd34865716
+version: 1.0.0
+dataset_uuid: 624e5142-bce1-4422-b3ba-86575f715d64
