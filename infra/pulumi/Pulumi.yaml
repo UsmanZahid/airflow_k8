@@ -1,0 +1,15 @@
+name: airflow-k8
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: >-
+  Local Airflow-on-Kubernetes ETL platform (kind + local registry + MinIO/Delta +
+  Airflow + Dremio + Superset + serving Postgres), provisioned end-to-end with Pulumi.
+config:
+  airflow-k8:cluster:
+    description: kind cluster name
+    default: etl
+  airflow-k8:imageTag:
+    description: tag for the locally-built etl/superset images
+    default: dev

@@ -37,6 +37,26 @@ make ui              # port-forward Airflow (8080) + MinIO console (9001)
 make down            # kind delete cluster
 ```
 
+## Provision with Pulumi (infrastructure as code)
+
+The whole platform can be stood up as code (Python) instead of the Makefile — Pulumi
+computes the dependency order and gives `preview`/`destroy`:
+
+```bash
+cd infra/pulumi
+uv venv venv --seed --python 3.12
+uv pip install --python venv/Scripts/python.exe -r requirements.txt
+export PULUMI_CONFIG_PASSPHRASE=<something>     # local state backend
+pulumi login --local
+pulumi up        # kind + registry + images + MinIO/Dremio/Superset/serving-PG + Airflow + pools
+pulumi destroy   # tear it all down
+```
+
+`pulumi up` provisions everything (see `infra/pulumi/__main__.py`). Afterwards, wire the BI
+layer with `infra/superset/setup_superset.py` (or import `infra/superset/assets/`). The
+Makefile path still works and is lighter for quick local iteration; Pulumi is the choice
+for reproducible/multi-environment provisioning.
+
 ## Add a new pipeline
 
 ```bash
