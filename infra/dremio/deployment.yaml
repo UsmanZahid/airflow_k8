@@ -36,10 +36,11 @@ spec:
         - name: dremio
           image: dremio/dremio-oss:26.0.5
           env:
+            # Trimmed for local: enough for a tiny test lake, far lighter than the defaults.
             - name: DREMIO_MAX_HEAP_MEMORY_SIZE_MB
-              value: "3072"
+              value: "2048"
             - name: DREMIO_MAX_DIRECT_MEMORY_SIZE_MB
-              value: "3072"
+              value: "1024"
           ports:
             - name: web
               containerPort: 9047
@@ -59,11 +60,11 @@ spec:
             failureThreshold: 20
           resources:
             requests:
-              cpu: "500m"
-              memory: "3Gi"
+              cpu: "250m"
+              memory: "1Gi"
             limits:
-              cpu: "4"
-              memory: "7Gi"
+              cpu: "2"
+              memory: "3584Mi"
       volumes:
         - name: data
           persistentVolumeClaim:

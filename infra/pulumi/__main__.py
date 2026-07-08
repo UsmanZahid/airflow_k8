@@ -27,7 +27,10 @@ cfg = pulumi.Config()
 CLUSTER = cfg.get("cluster") or "etl"
 TAG = cfg.get("imageTag") or "dev"
 REGISTRY = "localhost:5001"
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# Forward-slash path for Python/Pulumi/docker; MSYS path (/c/...) for git-bash command strings
+# (backslashes in a bash -c string get eaten as escapes).
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")).replace("\\", "/")
+REPO_BASH = ("/" + REPO[0].lower() + REPO[2:]) if REPO[1:2] == ":" else REPO
 
 # Run command resources through git-bash with our tool dir (kind/helm) on PATH.
 BASH = ["bash", "-c"]
@@ -42,7 +45,7 @@ def sh(create: str, delete: str = "", **kw):
 # --------------------------------------------------------------- 1. kind + registry
 registry = command.local.Command(
     "registry",
-    **sh(f"bash {REPO}/infra/registry/setup-registry.sh",
+    **sh(f"bash {REPO_BASH}/infra/registry/setup-registry.sh",
          "docker rm -f kind-registry || true"),
 )
 
@@ -55,7 +58,7 @@ cluster = command.local.Command(
 
 wire = command.local.Command(
     "registry-wire",
-    **sh(f"bash {REPO}/infra/registry/connect-registry.sh {CLUSTER}"),
+    **sh(f"bash {REPO_BASH}/infra/registry/connect-registry.sh {CLUSTER}"),
     opts=pulumi.ResourceOptions(depends_on=[cluster]),
 )
 
@@ -88,28 +91,24 @@ superset_image = docker.Image(
 )
 
 # --------------------------------------------------------------- 3. workloads (reuse manifests)
-minio = ConfigGroup(
-    "minio",
-    files=[f"{REPO}/infra/minio/*.yaml"],
-    opts=k8s_opts,
-)
+# Deploy SEQUENTIALLY (each waits for the previous to be Ready) so all the heavy pods don't
+# start at once and spike memory: minio -> serving-pg -> superset -> airflow -> dremio(last).
+def _after(*deps):
+    return pulumi.ResourceOptions(provider=k8s_provider, depends_on=[wire, *deps])
+
+
+minio = ConfigGroup("minio", files=[f"{REPO}/infra/minio/*.yaml"], opts=k8s_opts)
 
 serving_pg = ConfigGroup(
     "serving-postgres",
     files=[f"{REPO}/infra/superset/namespace.yaml", f"{REPO}/infra/superset/serving-postgres.yaml"],
-    opts=k8s_opts,
+    opts=_after(minio),
 )
 
 superset = ConfigGroup(
     "superset",
     files=[f"{REPO}/infra/superset/deployment.yaml", f"{REPO}/infra/superset/service.yaml"],
-    opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[wire, serving_pg, superset_image]),
-)
-
-dremio = ConfigGroup(
-    "dremio",
-    files=[f"{REPO}/infra/dremio/*.yaml"],
-    opts=k8s_opts,
+    opts=_after(serving_pg, superset_image),
 )
 
 # Airflow namespace + secrets (consumed by the KPO/etl pods) before the Helm release.
@@ -120,22 +119,31 @@ airflow_pre = ConfigGroup(
         f"{REPO}/infra/helm/minio-credentials.yaml",
         f"{REPO}/infra/helm/serving-db-credentials.yaml",
     ],
-    opts=k8s_opts,
+    opts=_after(superset),
 )
 
 # --------------------------------------------------------------- 4. Airflow (Helm)
 airflow = Release(
     "airflow",
     ReleaseArgs(
+        name="airflow",  # pin the release name (else Pulumi auto-suffixes -> airflow-xxxx-scheduler)
         chart="airflow",
         version="1.22.0",
         repository_opts=RepositoryOptsArgs(repo="https://airflow.apache.org"),
         namespace="airflow",
         create_namespace=False,  # created by airflow_pre
         value_yaml_files=[pulumi.FileAsset(f"{REPO}/infra/helm/airflow-values.yaml")],
-        timeout=900,
+        timeout=1800,  # Airflow can be slow to fully init on a loaded local machine
     ),
     opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[airflow_pre, etl_image]),
+)
+
+# Dremio LAST (heaviest / least critical) — only after Airflow is up, so its JVM doesn't
+# compete for memory during Airflow's startup.
+dremio = ConfigGroup(
+    "dremio",
+    files=[f"{REPO}/infra/dremio/*.yaml"],
+    opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[wire, airflow]),
 )
 
 # --------------------------------------------------------------- 5. per-pipeline 1-slot pools
@@ -143,7 +151,7 @@ pools = command.local.Command(
     "pools",
     **sh(
         "kubectl -n airflow rollout status deploy/airflow-scheduler --timeout=300s; "
-        f"for p in $(grep -E '^- id:' {REPO}/dags/pipelines.generated.yaml | awk '{{print $3}}'); do "
+        f"for p in $(grep -E '^- id:' {REPO_BASH}/dags/pipelines.generated.yaml | awk '{{print $3}}'); do "
         "kubectl -n airflow exec deploy/airflow-scheduler -c scheduler -- "
         "airflow pools set etl_$p 1 \"serialize $p writers\"; done"
     ),
