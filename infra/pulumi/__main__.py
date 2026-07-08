@@ -91,36 +91,42 @@ superset_image = docker.Image(
 )
 
 # --------------------------------------------------------------- 3. workloads (reuse manifests)
-# Deploy SEQUENTIALLY (each waits for the previous to be Ready) so all the heavy pods don't
-# start at once and spike memory: minio -> serving-pg -> superset -> airflow -> dremio(last).
+# ALL namespaces first, as one group everything else depends on. ConfigGroup does not order
+# namespace-before-resource on a fresh cluster, so applying namespaced resources in the same
+# (or a parallel) group races the namespace -> "namespace not found". This removes that race.
+namespaces = ConfigGroup("namespaces", files=[
+    f"{REPO}/infra/minio/namespace.yaml",
+    f"{REPO}/infra/superset/namespace.yaml",   # superset ns + superset-secret
+    f"{REPO}/infra/dremio/namespace.yaml",
+    f"{REPO}/infra/helm/namespace.yaml",        # airflow ns
+], opts=k8s_opts)
+
+
 def _after(*deps):
-    return pulumi.ResourceOptions(provider=k8s_provider, depends_on=[wire, *deps])
+    # wait for the namespaces (+ registry wiring) and this stage's serial predecessor
+    return pulumi.ResourceOptions(provider=k8s_provider, depends_on=[wire, namespaces, *deps])
 
 
-minio = ConfigGroup("minio", files=[f"{REPO}/infra/minio/*.yaml"], opts=k8s_opts)
+# Deploy SEQUENTIALLY so the heavy pods don't all start at once and spike memory:
+# minio -> serving-pg -> superset -> airflow -> dremio (last). namespace.yaml excluded (above).
+minio = ConfigGroup("minio", files=[
+    f"{REPO}/infra/minio/secret.yaml",
+    f"{REPO}/infra/minio/deployment.yaml",
+    f"{REPO}/infra/minio/service.yaml",
+    f"{REPO}/infra/minio/create-buckets-job.yaml",
+], opts=_after())
 
-serving_pg = ConfigGroup(
-    "serving-postgres",
-    files=[f"{REPO}/infra/superset/namespace.yaml", f"{REPO}/infra/superset/serving-postgres.yaml"],
-    opts=_after(minio),
-)
+serving_pg = ConfigGroup("serving-postgres",
+    files=[f"{REPO}/infra/superset/serving-postgres.yaml"], opts=_after(minio))
 
-superset = ConfigGroup(
-    "superset",
+superset = ConfigGroup("superset",
     files=[f"{REPO}/infra/superset/deployment.yaml", f"{REPO}/infra/superset/service.yaml"],
-    opts=_after(serving_pg, superset_image),
-)
+    opts=_after(serving_pg, superset_image))
 
-# Airflow namespace + secrets (consumed by the KPO/etl pods) before the Helm release.
-airflow_pre = ConfigGroup(
-    "airflow-pre",
-    files=[
-        f"{REPO}/infra/helm/namespace.yaml",
-        f"{REPO}/infra/helm/minio-credentials.yaml",
-        f"{REPO}/infra/helm/serving-db-credentials.yaml",
-    ],
-    opts=_after(superset),
-)
+airflow_pre = ConfigGroup("airflow-pre", files=[
+    f"{REPO}/infra/helm/minio-credentials.yaml",
+    f"{REPO}/infra/helm/serving-db-credentials.yaml",
+], opts=_after(superset))
 
 # --------------------------------------------------------------- 4. Airflow (Helm)
 airflow = Release(
@@ -142,8 +148,8 @@ airflow = Release(
 # compete for memory during Airflow's startup.
 dremio = ConfigGroup(
     "dremio",
-    files=[f"{REPO}/infra/dremio/*.yaml"],
-    opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[wire, airflow]),
+    files=[f"{REPO}/infra/dremio/deployment.yaml", f"{REPO}/infra/dremio/service.yaml"],
+    opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[wire, namespaces, airflow]),
 )
 
 # --------------------------------------------------------------- 5. per-pipeline 1-slot pools
