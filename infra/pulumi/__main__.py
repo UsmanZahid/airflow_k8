@@ -72,21 +72,18 @@ k8s_provider = k8s.Provider("k8s", kubeconfig=kubeconfig.stdout)
 k8s_opts = pulumi.ResourceOptions(provider=k8s_provider, depends_on=[wire])
 
 # --------------------------------------------------------------- 2. images
-etl_image = docker.Image(
+# Build + push via the docker CLI (command), not pulumi_docker.Image: the latter tars the
+# whole build context and chokes ("invalid tar header") on the 600 MB etl/.venv, whereas the
+# CLI respects .dockerignore and handles it fine.
+etl_image = command.local.Command(
     "etl-image",
-    image_name=f"{REGISTRY}/etl:{TAG}",
-    build=docker.DockerBuildArgs(context=f"{REPO}/etl", platform="linux/amd64"),
-    registry=docker.RegistryArgs(server=REGISTRY),
-    skip_push=False,
+    **sh(f"docker build -t {REGISTRY}/etl:{TAG} {REPO_BASH}/etl && docker push {REGISTRY}/etl:{TAG}"),
     opts=pulumi.ResourceOptions(depends_on=[registry]),
 )
 
-superset_image = docker.Image(
+superset_image = command.local.Command(
     "superset-image",
-    image_name=f"{REGISTRY}/superset:{TAG}",
-    build=docker.DockerBuildArgs(context=f"{REPO}/infra/superset", platform="linux/amd64"),
-    registry=docker.RegistryArgs(server=REGISTRY),
-    skip_push=False,
+    **sh(f"docker build -t {REGISTRY}/superset:{TAG} {REPO_BASH}/infra/superset && docker push {REGISTRY}/superset:{TAG}"),
     opts=pulumi.ResourceOptions(depends_on=[registry]),
 )
 
@@ -170,4 +167,4 @@ pulumi.export("kube_context", f"kind-{CLUSTER}")
 pulumi.export("airflow_ui", "kubectl -n airflow port-forward svc/airflow-api-server 8080:8080  # admin/admin")
 pulumi.export("superset_ui", "kubectl -n superset port-forward svc/superset 8088:8088  # admin/admin")
 pulumi.export("minio_console", "kubectl -n minio port-forward svc/minio 9001:9001  # minioadmin/minioadmin123")
-pulumi.export("etl_image", etl_image.image_name)
+pulumi.export("etl_image", f"{REGISTRY}/etl:{TAG}")
